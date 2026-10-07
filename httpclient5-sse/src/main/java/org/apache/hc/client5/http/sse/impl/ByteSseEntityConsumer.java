@@ -48,7 +48,7 @@ import org.apache.hc.core5.http.nio.entity.AbstractBinAsyncEntityConsumer;
  *   <li>Validates {@code Content-Type} equals {@code text/event-stream}
  *       in {@link #streamStart(ContentType)}; otherwise throws {@link HttpException}.</li>
  *   <li>Strips a UTF-8 BOM if present in the first chunk.</li>
- *   <li>Accepts LF and CRLF line endings; tolerates CRLF split across buffers.</li>
+ *   <li>Accepts CR, LF and CRLF line endings per the SSE grammar; tolerates CRLF split across buffers.</li>
  *   <li>Implements WHATWG SSE fields: {@code data}, {@code id}, {@code event}, {@code retry}.
  *       Unknown fields and malformed {@code retry} values are ignored.</li>
  *   <li>At end of stream, flushes any partially accumulated line and forces a final
@@ -76,6 +76,7 @@ public final class ByteSseEntityConsumer extends AbstractBinAsyncEntityConsumer<
     // line accumulator
     private byte[] lineBuf = new byte[256];
     private int lineLen = 0;
+    private boolean pendingCr = false;
 
     // event accumulator
     private final StringBuilder data = new StringBuilder(256);
@@ -115,12 +116,12 @@ public final class ByteSseEntityConsumer extends AbstractBinAsyncEntityConsumer<
                     continue;
                 }
                 if (bomMatched > 0) {
-                    appendByte((byte) 0xEF);
+                    processByte((byte) 0xEF);
                     if (bomMatched >= 2) {
-                        appendByte((byte) 0xBB);
+                        processByte((byte) 0xBB);
                     }
                 }
-                appendByte((byte) b);
+                processByte((byte) b);
                 bomMatched = 0;
                 bomDone = true;
                 break; // drop into normal loop below for the rest of 'src'
@@ -134,17 +135,7 @@ public final class ByteSseEntityConsumer extends AbstractBinAsyncEntityConsumer<
         }
 
         while (src.hasRemaining()) {
-            final byte b = src.get();
-            if (b == LF) {
-                int len = lineLen;
-                if (len > 0 && lineBuf[len - 1] == CR) {
-                    len--;
-                }
-                handleLine(lineBuf, len);
-                lineLen = 0;
-            } else {
-                appendByte(b);
-            }
+            processByte(src.get());
         }
 
         if (endOfStream) {
@@ -152,13 +143,29 @@ public final class ByteSseEntityConsumer extends AbstractBinAsyncEntityConsumer<
         }
     }
 
+    private void processByte(final byte b) {
+        if (b == LF) {
+            if (pendingCr) {
+                // LF completing a CRLF pair; the line was already emitted on the CR.
+                pendingCr = false;
+            } else {
+                handleLine(lineBuf, lineLen);
+                lineLen = 0;
+            }
+        } else if (b == CR) {
+            // A lone CR is a line terminator per the SSE grammar (CR / LF / CRLF).
+            pendingCr = true;
+            handleLine(lineBuf, lineLen);
+            lineLen = 0;
+        } else {
+            pendingCr = false;
+            appendByte(b);
+        }
+    }
+
     private void flushEndOfStream() {
         if (lineLen > 0) {
-            int len = lineLen;
-            if (lineBuf[len - 1] == CR) {
-                len--;
-            }
-            handleLine(lineBuf, len);
+            handleLine(lineBuf, lineLen);
             lineLen = 0;
         }
         handleLine(lineBuf, 0);
@@ -182,6 +189,8 @@ public final class ByteSseEntityConsumer extends AbstractBinAsyncEntityConsumer<
     @Override
     public void releaseResources() {
         lineBuf = new byte[0];
+        lineLen = 0;
+        pendingCr = false;
         data.setLength(0);
         id = null;
         type = null;
