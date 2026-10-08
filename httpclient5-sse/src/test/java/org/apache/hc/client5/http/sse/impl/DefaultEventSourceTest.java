@@ -26,12 +26,15 @@
  */
 package org.apache.hc.client5.http.sse.impl;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
@@ -49,6 +52,7 @@ import org.apache.hc.client5.http.sse.EventSourceListener;
 import org.apache.hc.core5.concurrent.FutureCallback;
 import org.apache.hc.core5.function.Supplier;
 import org.apache.hc.core5.http.HttpHost;
+import org.apache.hc.core5.http.HttpRequest;
 import org.apache.hc.core5.http.nio.AsyncPushConsumer;
 import org.apache.hc.core5.http.nio.AsyncRequestProducer;
 import org.apache.hc.core5.http.nio.AsyncResponseConsumer;
@@ -127,6 +131,7 @@ class DefaultEventSourceTest {
 
     static final class CapturingClient extends CloseableHttpAsyncClient {
         volatile FutureCallback<Void> lastCallback;
+        volatile HttpRequest lastRequest;
 
         @Override
         public void start() { }
@@ -156,8 +161,19 @@ class DefaultEventSourceTest {
                 final HandlerFactory<AsyncPushConsumer> pushHandlerFactory,
                 final HttpContext context,
                 final FutureCallback<T> callback) {
-            @SuppressWarnings("unchecked") final FutureCallback<Void> cb = (FutureCallback<Void>) callback;
+
+            @SuppressWarnings("unchecked")
+            final FutureCallback<Void> cb = (FutureCallback<Void>) callback;
             this.lastCallback = cb;
+
+            try {
+                requestProducer.sendRequest(
+                        (request, entityDetails, requestContext) -> this.lastRequest = request,
+                        context);
+            } catch (final Exception ex) {
+                throw new IllegalStateException(ex);
+            }
+
             return new CompletableFuture<>();
         }
 
@@ -264,5 +280,88 @@ class DefaultEventSourceTest {
         public V get(final long timeout, final TimeUnit unit) {
             return null;
         }
+    }
+
+    @Test
+    void doesNotSendEmptyLastEventId() {
+        final RecordingScheduler scheduler = new RecordingScheduler();
+        final CapturingClient client = new CapturingClient();
+
+        final DefaultEventSource es = new DefaultEventSource(
+                client,
+                URI.create("http://example.org/sse"),
+                Collections.emptyMap(),
+                (id, type, data) -> { },
+                scheduler,
+                null,
+                null,
+                SseParser.CHAR);
+
+        es.setLastEventId("");
+        es.start();
+
+        assertFalse(client.lastRequest.containsHeader("Last-Event-ID"));
+    }
+
+    @Test
+    void sendsNonEmptyLastEventId() {
+        final RecordingScheduler scheduler = new RecordingScheduler();
+        final CapturingClient client = new CapturingClient();
+
+        final DefaultEventSource es = new DefaultEventSource(
+                client,
+                URI.create("http://example.org/sse"),
+                Collections.emptyMap(),
+                (id, type, data) -> { },
+                scheduler,
+                null,
+                null,
+                SseParser.CHAR);
+
+        es.setLastEventId("42");
+        es.start();
+
+        assertEquals(
+                "42",
+                client.lastRequest.getFirstHeader("Last-Event-ID").getValue());
+    }
+
+    @Test
+    void headerNamesAreCaseInsensitive() {
+        final DefaultEventSource eventSource = new DefaultEventSource(
+                new CapturingClient(),
+                URI.create("http://localhost/sse"),
+                Collections.emptyMap(),
+                null);
+
+        eventSource.setHeader("Authorization", "one");
+        eventSource.setHeader("authorization", "two");
+
+        final Map<String, String> headers = eventSource.getHeaders();
+
+        assertEquals(1, headers.size());
+        assertEquals("two", headers.get("AUTHORIZATION"));
+
+        eventSource.removeHeader("AUTHORIZATION");
+
+        assertTrue(eventSource.getHeaders().isEmpty());
+    }
+
+    @Test
+    void initialHeaderNamesAreCaseInsensitive() {
+        final Map<String, String> initialHeaders = new LinkedHashMap<>();
+        initialHeaders.put("X-Test", "one");
+        initialHeaders.put("x-test", "two");
+
+        final DefaultEventSource eventSource = new DefaultEventSource(
+                new CapturingClient(),
+                URI.create("http://localhost/sse"),
+                initialHeaders,
+                null);
+
+        final Map<String, String> headers = eventSource.getHeaders();
+
+        assertEquals(1, headers.size());
+        assertEquals("two", headers.get("X-TEST"));
     }
 }

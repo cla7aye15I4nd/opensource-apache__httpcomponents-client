@@ -113,12 +113,7 @@ public final class SseEntityConsumer extends AbstractCharAsyncEntityConsumer<Voi
             }
         }
         if (endOfStream) {
-            if (partial.length() > 0) {
-                reader.line(partial.toString());
-                partial.setLength(0);
-            }
-            // Flush any accumulated fields into a final event.
-            reader.line("");
+            partial.setLength(0);
         }
     }
 
@@ -137,6 +132,11 @@ public final class SseEntityConsumer extends AbstractCharAsyncEntityConsumer<Voi
         partial.setLength(0);
         pendingCr = false;
         reader = null;
+    }
+
+    @Override
+    public void onLastEventId(final String id) {
+        cb.onLastEventId(id);
     }
 
     // ServerSentEventReader.Callback
