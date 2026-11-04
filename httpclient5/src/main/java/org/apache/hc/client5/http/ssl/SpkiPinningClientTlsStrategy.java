@@ -121,15 +121,17 @@ public final class SpkiPinningClientTlsStrategy extends DefaultClientTlsStrategy
             }
             final String norm;
             try {
-                norm = IDN.toASCII(pattern).toLowerCase(Locale.ROOT);
+                // Normalize before validating so that "*.com." is rejected like "*.com".
+                norm = stripRootDot(IDN.toASCII(pattern).toLowerCase(Locale.ROOT));
             } catch (final IllegalArgumentException e) {
                 throw new IllegalArgumentException("Invalid IDN host pattern: " + pattern, e);
             }
             if (norm.isEmpty()) {
                 throw new IllegalArgumentException("Empty host pattern");
             }
-            final boolean wc = norm.startsWith("*.");
-            if (wc && norm.indexOf('.', 2) < 0) { // require "*.<label>"
+            final boolean wc = norm.startsWith("*");
+            if (wc && (norm.length() < 2 || norm.charAt(1) != '.' || norm.indexOf('.', 2) < 0)) {
+                // require "*.<label>.<label>"; also catches "*." and "*.com." after normalization
                 throw new IllegalArgumentException("Wildcard must be single-label: *.example.com");
             }
             if (pins == null || pins.isEmpty()) {
@@ -180,7 +182,9 @@ public final class SpkiPinningClientTlsStrategy extends DefaultClientTlsStrategy
         final String host;
         try {
             // Canonicalize host: IDNA (Punycode) + lowercase for consistent matching.
-            host = IDN.toASCII(hostname == null ? "" : hostname).toLowerCase(Locale.ROOT);
+            // The absolute form "api.example.com." names the same host and passes the
+            // built-in hostname check, so it must be matched against the same rules.
+            host = stripRootDot(IDN.toASCII(hostname == null ? "" : hostname).toLowerCase(Locale.ROOT));
         } catch (final IllegalArgumentException e) {
             throw new SSLException("Invalid IDN host: " + hostname, e);
         }
@@ -285,6 +289,10 @@ public final class SpkiPinningClientTlsStrategy extends DefaultClientTlsStrategy
         }
     }
 
+
+    private static String stripRootDot(final String host) {
+        return host.length() > 1 && host.endsWith(".") ? host.substring(0, host.length() - 1) : host;
+    }
 
     private List<Rule> matchedRules(final String host) {
         final List<Rule> out = new ArrayList<>();
