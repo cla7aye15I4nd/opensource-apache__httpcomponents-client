@@ -75,12 +75,24 @@ class TestRFC6265CookieSpec {
     }
 
     @Test
+    void testTrailingDotDomainAttributeRejected() {
+        final RFC6265CookieSpec cookiespec = new RFC6265StrictSpec();
+        final CookieOrigin origin = new CookieOrigin("example.com", 80, "/", false);
+
+        Assertions.assertThrows(MalformedCookieException.class, () -> cookiespec.parse(
+                new BasicHeader("Set-Cookie", "name=value; Domain=example.com."), origin));
+        Assertions.assertThrows(MalformedCookieException.class, () -> cookiespec.parse(
+                new BasicHeader("Set-Cookie", "name=value; Domain=example.com; Domain=foo."), origin));
+    }
+
+    @Test
     void testNoArgSpecsUsePublicSuffixMatcher() throws Exception {
         final CookieOrigin publicSuffixOrigin = new CookieOrigin("foo.com", 80, "/", false);
         final CookieOrigin exampleOrigin = new CookieOrigin("foo.example.com", 80, "/", false);
         final CookieOrigin exampleSibling = new CookieOrigin("bar.example.com", 80, "/", false);
         final CookieOrigin publicSuffixSibling = new CookieOrigin("bar.com", 80, "/", false);
-        final List<CookieSpec> cookieSpecs = Arrays.asList(new RFC6265LaxSpec(), new RFC6265StrictSpec());
+        final List<CookieSpec> cookieSpecs = Arrays.asList(new RFC6265LaxSpec(), new RFC6265StrictSpec(),
+                new RFC6265CookieSpecFactory().create(null));
 
         for (final CookieSpec cookieSpec : cookieSpecs) {
             final Cookie publicSuffixCookie = cookieSpec.parse(
